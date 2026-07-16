@@ -19,11 +19,8 @@ top_n_markers = 5
 drug_confidence_threshold = 0.8
 
 run_output_directory = "/path/to/output_directory"
-
 cellect_file_path = "/path/to/cellect_results.cell_type_results.txt"
-
 marker_database_path = "/path/to/transcriptional_programs.rds"
-
 
 # ============================================================
 # CHECK FILES EXIST
