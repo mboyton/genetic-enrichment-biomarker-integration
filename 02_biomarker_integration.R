@@ -1,35 +1,28 @@
 # ============================================================
-# LOAD CELLECT, TRANSCRIPTIONAL PROGRAMS AND MR RESULTS
+# LOAD PACKAGES
 # ============================================================
 
 suppressPackageStartupMessages({
  library(data.table)
  library(dplyr)
+ library(purrr)
+ library(tidyr)
+ library(otargen)
 })
 
-# ! paramteres #####
+# ============================================================
+# CONFIGURATION
+# ============================================================
+
 cellect_pval_threshold = 0.05
-mr_method = "Inverse variance weighted"
-run_output_directory = "C:/Users/uh21133/OneDrive - University of Bristol/Desktop/2026-06/Careers/Applications/NHS_Principal-Data-Scientist/interview_preparation_2/code_example/working"
+top_n_markers = 5
+drug_confidence_threshold = 0.8
 
+run_output_directory = "/path/to/output_directory"
 
-# ============================================================
-# FILE PATHS
-# ============================================================
+cellect_file_path = "/path/to/cellect_results.cell_type_results.txt"
 
-cellect_file_path <- paste0(
- "C:/Users/uh21133/OneDrive - University of Bristol/Desktop/",
- "2026-06/Careers/Applications/NHS_Principal-Data-Scientist/",
- "interview_preparation_2/code_example/working/",
- "LawlorPBMC__PGCMDD_Lawlor_20260219_1.cell_type_results.txt"
-)
-
-marker_database_path <- paste0(
- "C:/Users/uh21133/OneDrive - University of Bristol/Desktop/",
- "2026-06/Careers/Applications/NHS_Principal-Data-Scientist/",
- "interview_preparation_2/code_example/working/",
- "LawlorPBMC_wgcna_transcriptional_programs.rds"
-)
+marker_database_path = "/path/to/transcriptional_programs.rds"
 
 
 # ============================================================
@@ -38,12 +31,17 @@ marker_database_path <- paste0(
 
 stopifnot(
  file.exists(cellect_file_path),
- file.exists(marker_database_path),
- file.exists(mr_file_path)
+ file.exists(marker_database_path)
+)
+
+dir.create(
+ run_output_directory,
+ recursive = TRUE,
+ showWarnings = FALSE
 )
 
 # ============================================================
-# 1. LOAD CELLECT RESULTS
+# 1. Load genetic enrichment results
 # ============================================================
 
 cellect_results <- fread(
@@ -65,10 +63,8 @@ cat(
  "cell types\n"
 )
 
-print(head(cellect_results))
-
 # ============================================================
-# 2. LOAD TRANSCRIPTIONAL PROGRAM DATABASE
+# 2. Load biomarker database
 # ============================================================
 
 transcriptional_programs <- readRDS(
@@ -81,14 +77,9 @@ cat(
  "\n"
 )
 
-print(names(transcriptional_programs))
-
-
 # ============================================================
-# IDENTIFY SIGNIFICANT CELL TYPES AND EXTRACT TOP MARKERS
+# 3. Identify significant cell populations and markers
 # ============================================================
-
-top_n_markers <- 5
 
 significant_cell_types <- cellect_results %>%
  filter(Coefficient_P_value < cellect_pval_threshold) %>%
@@ -108,7 +99,7 @@ significant_programmes <- transcriptional_programs[
  )
 ]
 
-# Combine programmes and select top WGCNA hub genes by kME
+# Combine programmes and select top hub genes by kME
 top_markers <- bind_rows(
  significant_programmes,
  .id = "cell_type"
@@ -137,12 +128,8 @@ print(
 )
 
 # ============================================================
-# BUILD PRIMARY TARGET + PROTEIN INTERACTOR TABLE
+# 4. Build primary target and protein interactor data
 # ============================================================
-
-library(dplyr)
-library(purrr)
-library(otargen)
 
 primary_targets <- top_markers %>%
  distinct(gene, .keep_all = TRUE)
@@ -168,18 +155,15 @@ protein_interactions <- purrr::map_dfr(
  }
 )
 
-
-names(protein_interactions)
-head(protein_interactions)
+cat(
+ "\nProtein interactions identified:",
+ nrow(protein_interactions),
+ "\n"
+)
 
 # ============================================================
-# QUERY KNOWN DRUGS FOR INTERACTING PROTEINS
+# 5. Query known drugs for interacting proteins (via API)
 # ============================================================
-
-library(dplyr)
-library(purrr)
-library(tidyr)
-library(otargen)
 
 network_targets <- protein_interactions %>%
  mutate(
@@ -232,10 +216,14 @@ network_drugs <- network_targets %>%
  ) %>%
  unnest(drug_results)
 
-network_drugs
+cat(
+ "\nDrug records identified:",
+ nrow(network_drugs),
+ "\n"
+)
 
 # ============================================================
-# APPROVED DRUGS FOR NETWORK INTERACTORS
+# 6. Filter for approved drugs
 # ============================================================
 
 approved_network_drugs <- network_targets %>%
@@ -267,11 +255,11 @@ approved_network_drugs <- network_targets %>%
  )
 
 # ============================================================
-# HIGH-CONFIDENCE APPROVED DRUGS (>0.8 interaction score)
+# 7. Filter for high confidence, unique approved drugs
 # ============================================================
 
 high_confidence_drugs <- approved_network_drugs %>%
- filter(score > 0.8) %>%
+ filter(score > drug_confidence_threshold) %>%
  distinct(
   primary_target,
   network_gene,
@@ -287,16 +275,64 @@ high_confidence_drugs <- approved_network_drugs %>%
   drug.name
  )
 
-high_confidence_drugs
+cat(
+ "\nHigh-confidence approved drug interactions:",
+ nrow(high_confidence_drugs),
+ "\n"
+)
+
 
 # ============================================================
-# SAVE OUTPUT
+# 8. Save outputs and run metadata
 # ============================================================
+
+run_timestamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
+
+output_file <- file.path(
+ run_output_directory,
+ paste0(
+  "high_confidence_approved_drugs_",
+  run_timestamp,
+  ".csv"
+ )
+)
+
 write.csv(
- high_confidence_drug_names,
- file.path(
-  run_output_directory,
-  "high_confidence_approved_drug_names.csv"
- ),
+ high_confidence_drugs,
+ output_file,
  row.names = FALSE
+)
+
+run_metadata <- list(
+ run_timestamp = run_timestamp,
+ cellect_file_path = cellect_file_path,
+ marker_database_path = marker_database_path,
+ cellect_pval_threshold = cellect_pval_threshold,
+ top_n_markers = top_n_markers,
+ drug_confidence_threshold = drug_confidence_threshold,
+ significant_cell_types = nrow(significant_cell_types),
+ primary_targets = nrow(primary_targets),
+ protein_interactions = nrow(protein_interactions),
+ high_confidence_drugs = nrow(high_confidence_drugs)
+)
+
+metadata_file <- file.path(
+ run_output_directory,
+ paste0(
+  "biomarker_integration_metadata_",
+  run_timestamp,
+  ".rds"
+ )
+)
+
+saveRDS(
+ run_metadata,
+ metadata_file
+)
+
+cat(
+ "\nOutputs saved:",
+ "\n -", output_file,
+ "\n -", metadata_file,
+ "\n"
 )
